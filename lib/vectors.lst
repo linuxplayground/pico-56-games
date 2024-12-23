@@ -1,0 +1,65 @@
+ca65 V2.19 - Git 75461e131
+Main file   : ../lib/vectors.s
+Current file: ../lib/vectors.s
+
+000000r 1               ; vim: set ft=asm_ca65 ts=4 sw=4 et:vdp
+000000r 1               
+000000r 1               .include "io.inc"
+000000r 2               ; vim: set ft=asm_ca65 ts=4 sw=4 et:
+000000r 2               vdp_ram = $7f10
+000000r 2               vdp_reg = $7f11
+000000r 2               
+000000r 2               
+000000r 1               
+000000r 1               .export _vdp_sync, _vdp_status
+000000r 1               
+000000r 1               .autoimport
+000000r 1               
+000000r 1               .segment "DATA"
+000000r 1               
+000000r 1  00           _vdp_status: .byte 0
+000001r 1  00           _vdp_sync:   .byte 0
+000002r 1               
+000002r 1               TMS9918_IRQ      = 1      ; /INT
+000002r 1               KB_IRQ           = 2      ; RES1
+000002r 1               TMS9918_IRQ_BIT  = (1 << (TMS9918_IRQ - 1))
+000002r 1               KB_IRQ_BIT       = (1 << (KB_IRQ - 1))
+000002r 1               INT_CTRL_ADDRESS = $7fdf
+000002r 1               
+000002r 1               .autoimport
+000002r 1               
+000002r 1               .code
+000000r 1               nmi:
+000000r 1  40               rti
+000001r 1               
+000001r 1               irq_handler:
+000001r 1  48               pha
+000002r 1  DA               phx
+000003r 1  5A               phy
+000004r 1  D8               cld
+000005r 1               
+000005r 1  AD DF 7F         lda INT_CTRL_ADDRESS
+000008r 1  89 01            bit #TMS9918_IRQ_BIT
+00000Ar 1  F0 0B            beq :+
+00000Cr 1  AD 11 7F         lda vdp_reg
+00000Fr 1  8D rr rr         sta _vdp_status
+000012r 1  A9 80            lda #$80
+000014r 1  8D rr rr         sta _vdp_sync
+000017r 1                   ;bra @exit
+000017r 1               :
+000017r 1  89 02            bit #KB_IRQ_BIT
+000019r 1  F0 03            beq :+
+00001Br 1  20 rr rr         jsr kbIntHandler
+00001Er 1               :
+00001Er 1               @exit:
+00001Er 1  7A               ply
+00001Fr 1  FA               plx
+000020r 1  68               pla
+000021r 1  40               rti
+000022r 1               
+000022r 1               .segment "VECTORS"
+000000r 1  rr rr            .addr nmi
+000002r 1  rr rr            .addr start
+000004r 1  rr rr            .addr irq_handler
+000006r 1               
+000006r 1               

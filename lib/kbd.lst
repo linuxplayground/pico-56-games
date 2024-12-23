@@ -1,0 +1,810 @@
+ca65 V2.19 - Git 75461e131
+Main file   : ../lib/kbd.s
+Current file: ../lib/kbd.s
+
+000000r 1               ; vim: set ft=asm_ca65 ts=4 sw=4 et:
+000000r 1               
+000000r 1               ; 6502 KB Controller - HBC-56
+000000r 1               ;
+000000r 1               ; Copyright (c) 2021 Troy Schrapel
+000000r 1               ;
+000000r 1               ; This code is licensed under the MIT license
+000000r 1               ;
+000000r 1               ; https://github@com/visrealm/hbc-56
+000000r 1               ;
+000000r 1               .include "macro.inc"
+000000r 2               ; vim: set ft=asm_ca65 ts=4 sw=4 et:vdp
+000000r 2               .macro div8
+000000r 2                   .repeat 3
+000000r 2                       lsr
+000000r 2                   .endrepeat
+000000r 2               .endmacro
+000000r 2               
+000000r 2               .macro mul32
+000000r 2                   .repeat 5
+000000r 2                       asl
+000000r 2                   .endrepeat
+000000r 2               .endmacro
+000000r 2               
+000000r 2               .macro store16 addr,val16
+000000r 2                   lda #val16
+000000r 2                   sta addr
+000000r 2                   lda #val16
+000000r 2                   sta addr + 1
+000000r 2               .endmacro
+000000r 2               
+000000r 2               .macro memcpy dst, src, cnt
+000000r 2               .if cnt <= 0
+000000r 2                   .error "memcpy: ivalid count: ", cnt
+000000r 2               .elseif cnt <= 8
+000000r 2                   .repeat  cnt - 1, i
+000000r 2                       lda src + i
+000000r 2                       sta dst + i
+000000r 2                   .endrepeat
+000000r 2               .elseif cnt <= 256
+000000r 2                   ldx #0
+000000r 2               :
+000000r 2                   lda src, x
+000000r 2                   sta dst, x
+000000r 2                   inx
+000000r 2                   cpx #(cnt & $ff)
+000000r 2                   bne :-
+000000r 2               .else
+000000r 2                   store16 MEM_SRC, src
+000000r 2                   store16 MEM_DST, dst
+000000r 2                   store16 MEM_LEN, cnt
+000000r 2               
+000000r 2                   jsr memcpyMultiPage
+000000r 2               .endif
+000000r 2               
+000000r 2               .macro setMemCpySrc src
+000000r 2                   store16 MEM_SRC, src
+000000r 2               .endmacro
+000000r 2               
+000000r 2               .macro setMemCpyDst dst
+000000r 2                   store16 MEM_DST, dst
+000000r 2               .endmacro
+000000r 2               
+000000r 2               .macro setMemCpySrcInd srcRef
+000000r 2                   lda srcRef
+000000r 2                   sta MEM_SRC
+000000r 2                   lda srcRef + 1
+000000r 2                   sta MEM_SRC + 1
+000000r 2               .endmacro
+000000r 2               
+000000r 2               .macro setMemCpyDstInd dstRef
+000000r 2                   lda dstRef
+000000r 2                   sta MEM_DST
+000000r 2                   lda dstRef + 1
+000000r 2                   sta MEM_DST + 1
+000000r 2               .endmacro
+000000r 2               
+000000r 2               .macro memcpySinglePage bytes
+000000r 2               
+000000r 2                   .if bytes <= 0
+000000r 2                       !error "memcpySinglePage: ivalid count: ", byte
+000000r 2                   .endif
+000000r 2               
+000000r 2                   ldy #bytes
+000000r 2                   jsr memcpySinglePage
+000000r 2               .endmacro
+000000r 2               
+000000r 2               .macro memset dst,val, cnt
+000000r 2               .if cnt <= 0
+000000r 2                   .error "memset: ivalid count: ", cnt
+000000r 2               .elseif cnt <= 8
+000000r 2                   lda val
+000000r 2                   .repeat cnt-1, i
+000000r 2                       sta dst + i
+000000r 2                   .endrepeat
+000000r 2               .elseif cnt <= 256
+000000r 2                   ldx #<cnt
+000000r 2                   lda val
+000000r 2               :
+000000r 2                   dex
+000000r 2                   sta dst, x
+000000r 2                   cpx #0
+000000r 2                   bne :-
+000000r 2               .else
+000000r 2                   store16 MEM_DST, dst
+000000r 2                   store16 MEM_LEN, cnt
+000000r 2                   lda val
+000000r 2                   jsr memsetMultiPage
+000000r 2               .endif
+000000r 2               .endmacro
+000000r 2               
+000000r 2               
+000000r 1               .export kbIntHandler, kbInit, kbIsPressed, kbReadAscii, kbReadByte, kbScancodeToAscii
+000000r 1               
+000000r 1               ; -------------------------
+000000r 1               ; Constants
+000000r 1               ; -------------------------
+000000r 1               ;KB_IO_PORT = $80
+000000r 1               KB_RAM_START = $7e00
+000000r 1               IO_PORT_BASE_ADDRESS = $7f00
+000000r 1               ; -------------------------
+000000r 1               ; High RAM
+000000r 1               ; -------------------------
+000000r 1               KB_FLAGS          = KB_RAM_START
+000000r 1               KB_TMP_X          = KB_RAM_START + 1
+000000r 1               KB_TMP_Y          = KB_RAM_START + 2
+000000r 1               KB_CB_PRESSED     = KB_RAM_START + 3
+000000r 1               KB_CB_RELEASED    = KB_RAM_START + 5
+000000r 1               KB_CURRENT_STATE  = KB_RAM_START + 7
+000000r 1               KB_BUFFER_HEAD    = KB_RAM_START + 8         ; head of circular buffer
+000000r 1               KB_BUFFER_TAIL    = KB_RAM_START + 9         ; tail of circular buffer
+000000r 1               KB_BUFFER         = KB_RAM_START + 10
+000000r 1               KB_BUFFER_SIZE    = (1 << 4)
+000000r 1               KB_BUFFER_MASK    = KB_BUFFER_SIZE - 1
+000000r 1               KB_PRESSED_MAP    = KB_BUFFER + KB_BUFFER_SIZE
+000000r 1               
+000000r 1               KB_PRESSED_MAP_SIZE = $fd + 1
+000000r 1               KB_PRESSED_MAP_BYTES = 32
+000000r 1               
+000000r 1               KB_RAM_SIZE     = (KB_PRESSED_MAP + KB_PRESSED_MAP_BYTES) - KB_RAM_START
+000000r 1               
+000000r 1               ; -------------------------
+000000r 1               ; Contants
+000000r 1               ; -------------------------
+000000r 1               KB_SHIFT_DOWN   = %00000001
+000000r 1               KB_CTRL_DOWN    = %00000010
+000000r 1               KB_ALT_DOWN     = %00000100
+000000r 1               KB_CAPS_LOCK    = %00001000
+000000r 1               KB_NUM_LOCK     = %00010000
+000000r 1               
+000000r 1               KB_RELEASE      = $f0
+000000r 1               KB_EXT_KEY      = $e0
+000000r 1               KB_PAUSE_KEY    = $e1
+000000r 1               
+000000r 1               KB_SCANCODE_0 = $45
+000000r 1               KB_SCANCODE_1 = $16
+000000r 1               KB_SCANCODE_2 = $1E
+000000r 1               KB_SCANCODE_3 = $26
+000000r 1               KB_SCANCODE_4 = $25
+000000r 1               KB_SCANCODE_5 = $2E
+000000r 1               KB_SCANCODE_6 = $36
+000000r 1               KB_SCANCODE_7 = $3D
+000000r 1               KB_SCANCODE_8 = $3E
+000000r 1               KB_SCANCODE_9 = $46
+000000r 1               KB_SCANCODE_A = $1C
+000000r 1               KB_SCANCODE_B = $32
+000000r 1               KB_SCANCODE_C = $21
+000000r 1               KB_SCANCODE_D = $23
+000000r 1               KB_SCANCODE_E = $24
+000000r 1               KB_SCANCODE_F = $2B
+000000r 1               KB_SCANCODE_G = $34
+000000r 1               KB_SCANCODE_H = $33
+000000r 1               KB_SCANCODE_I = $43
+000000r 1               KB_SCANCODE_J = $3B
+000000r 1               KB_SCANCODE_K = $42
+000000r 1               KB_SCANCODE_L = $4B
+000000r 1               KB_SCANCODE_M = $3A
+000000r 1               KB_SCANCODE_N = $31
+000000r 1               KB_SCANCODE_O = $44
+000000r 1               KB_SCANCODE_P = $4D
+000000r 1               KB_SCANCODE_Q = $15
+000000r 1               KB_SCANCODE_R = $2D
+000000r 1               KB_SCANCODE_S = $1B
+000000r 1               KB_SCANCODE_T = $2C
+000000r 1               KB_SCANCODE_U = $3C
+000000r 1               KB_SCANCODE_V = $2A
+000000r 1               KB_SCANCODE_W = $1D
+000000r 1               KB_SCANCODE_X = $22
+000000r 1               KB_SCANCODE_Y = $35
+000000r 1               KB_SCANCODE_Z = $1A
+000000r 1               KB_SCANCODE_F1 = $05
+000000r 1               KB_SCANCODE_F2 = $06
+000000r 1               KB_SCANCODE_F3 = $04
+000000r 1               KB_SCANCODE_F4 = $0C
+000000r 1               KB_SCANCODE_F5 = $03
+000000r 1               KB_SCANCODE_F6 = $0B
+000000r 1               KB_SCANCODE_F7 = $83
+000000r 1               KB_SCANCODE_F8 = $0A
+000000r 1               KB_SCANCODE_F9 = $01
+000000r 1               KB_SCANCODE_F10 = $09
+000000r 1               KB_SCANCODE_F11 = $78
+000000r 1               KB_SCANCODE_F12 = $07
+000000r 1               KB_SCANCODE_NUMPAD_0 = $70
+000000r 1               KB_SCANCODE_NUMPAD_1 = $69
+000000r 1               KB_SCANCODE_NUMPAD_2 = $72
+000000r 1               KB_SCANCODE_NUMPAD_3 = $7A
+000000r 1               KB_SCANCODE_NUMPAD_4 = $6B
+000000r 1               KB_SCANCODE_NUMPAD_5 = $73
+000000r 1               KB_SCANCODE_NUMPAD_6 = $74
+000000r 1               KB_SCANCODE_NUMPAD_7 = $6C
+000000r 1               KB_SCANCODE_NUMPAD_8 = $75
+000000r 1               KB_SCANCODE_NUMPAD_9 = $7D
+000000r 1               KB_SCANCODE_NUMPAD_DIVIDE = $CA
+000000r 1               KB_SCANCODE_NUMPAD_ENTER = $DA
+000000r 1               KB_SCANCODE_NUMPAD_MINUS = $7B
+000000r 1               KB_SCANCODE_NUMPAD_MULTIPLY = $7C
+000000r 1               KB_SCANCODE_NUMPAD_PERIOD = $71
+000000r 1               KB_SCANCODE_NUMPAD_PLUS = $79
+000000r 1               KB_SCANCODE_NUM_LOCK = $77
+000000r 1               KB_SCANCODE_ALT_LEFT = $11
+000000r 1               KB_SCANCODE_ALT_RIGHT_ = $91
+000000r 1               KB_SCANCODE_APOS = $52
+000000r 1               KB_SCANCODE_ARROW_DOWN = $F2
+000000r 1               KB_SCANCODE_ARROW_LEFT = $EB
+000000r 1               KB_SCANCODE_ARROW_RIGHT = $F4
+000000r 1               KB_SCANCODE_ARROW_UP = $F5
+000000r 1               KB_SCANCODE_BACKSPACE = $66
+000000r 1               KB_SCANCODE_CAPS_LOCK = $58
+000000r 1               KB_SCANCODE_COMMA = $41
+000000r 1               KB_SCANCODE_CTRL_LEFT = $14
+000000r 1               KB_SCANCODE_CTRL_RIGHT = $94
+000000r 1               KB_SCANCODE_DELETE = $F1
+000000r 1               KB_SCANCODE_END = $E9
+000000r 1               KB_SCANCODE_ENTER = $5A
+000000r 1               KB_SCANCODE_EQUAL = $55
+000000r 1               KB_SCANCODE_ESC = $76
+000000r 1               KB_SCANCODE_HOME = $EC
+000000r 1               KB_SCANCODE_INSERT = $F0
+000000r 1               KB_SCANCODE_MENU = $AF
+000000r 1               KB_SCANCODE_MINUS = $4E
+000000r 1               KB_SCANCODE_PAGE_DOWN = $FA
+000000r 1               KB_SCANCODE_PAGE_UP = $FD
+000000r 1               KB_SCANCODE_PAUSE = $E1
+000000r 1               KB_SCANCODE_PERIOD = $49
+000000r 1               KB_SCANCODE_PRTSCR = $92
+000000r 1               KB_SCANCODE_SCROLL_LOCK = $7E
+000000r 1               KB_SCANCODE_SEMICOLON = $4C
+000000r 1               KB_SCANCODE_SHIFT_LEFT = $12
+000000r 1               KB_SCANCODE_SHIFT_RIGHT = $59
+000000r 1               KB_SCANCODE_SLASH_BACK = $5D
+000000r 1               KB_SCANCODE_SLASH_FORWARD = $4A
+000000r 1               KB_SCANCODE_SPACEBAR = $29
+000000r 1               KB_SCANCODE_SQUARE_LEFT = $54
+000000r 1               KB_SCANCODE_SQUARE_RIGHT = $5B
+000000r 1               KB_SCANCODE_TAB = $0D
+000000r 1               KB_SCANCODE_TILDE = $0E
+000000r 1               KB_SCANCODE_WINDOWS_LEFT = $9F
+000000r 1               KB_SCANCODE_WINDOWS_RIGHT = $A7
+000000r 1               
+000000r 1               
+000000r 1               KB_SHIFT_LEFT_MAP_BYTE = KB_SCANCODE_SHIFT_LEFT >> 3
+000000r 1               KB_SHIFT_LEFT_MAP_BIT  = $80 >> (KB_SCANCODE_SHIFT_LEFT & $07)
+000000r 1               
+000000r 1               KB_SHIFT_RIGHT_MAP_BYTE = KB_SCANCODE_SHIFT_RIGHT >> 3
+000000r 1               KB_SHIFT_RIGHT_MAP_BIT  = $80 >> (KB_SCANCODE_SHIFT_RIGHT & $07)
+000000r 1               
+000000r 1               
+000000r 1               ; IO Ports
+000000r 1               KB_IO_ADDR         = $7F80
+000000r 1               KB_STATUS_ADDR     = $7F81
+000000r 1               
+000000r 1               ; -----------------------------------------------------------------------------
+000000r 1               ; kbInit: Initialise the keyboard
+000000r 1               ; -----------------------------------------------------------------------------
+000000r 1               kbInit:
+000000r 1  A9 00                lda #$00
+000002r 1  8D 00 7E             sta KB_FLAGS
+000005r 1               
+000005r 1  A2 10                ldx #16 ;buffer size
+000007r 1               
+000007r 1                       ; ensure the hardware keyboard buffer is clear
+000007r 1               :
+000007r 1  8E 01 7E             stx KB_TMP_X
+00000Ar 1  20 rr rr             jsr kbReadByte
+00000Dr 1  AE 01 7E             ldx KB_TMP_X
+000010r 1  CA                   dex
+000011r 1  D0 F4                bne :-
+000013r 1               
+000013r 1  A2 20 A5 00          memset KB_PRESSED_MAP, 0, KB_PRESSED_MAP_BYTES
+000017r 1  CA 9D 1A 7E  
+00001Br 1  E0 00 D0 F8  
+00001Fr 1               
+00001Fr 1  9C 08 7E             stz KB_BUFFER_HEAD
+000022r 1  9C 09 7E             stz KB_BUFFER_TAIL
+000025r 1               
+000025r 1  A9 00                lda #KB_STATE_DEFAULT
+000027r 1  8D 07 7E             sta KB_CURRENT_STATE
+00002Ar 1               
+00002Ar 1                       ; flow through
+00002Ar 1               
+00002Ar 1               kbResetCallbacks:
+00002Ar 1  A9 rr                lda #<kbDummyCb
+00002Cr 1  8D 03 7E             sta KB_CB_PRESSED
+00002Fr 1  8D 05 7E             sta KB_CB_RELEASED
+000032r 1               
+000032r 1  A9 rr                lda #>kbDummyCb
+000034r 1  8D 04 7E             sta KB_CB_PRESSED + 1
+000037r 1  8D 06 7E             sta KB_CB_RELEASED + 1
+00003Ar 1               
+00003Ar 1                       ; flow through
+00003Ar 1               
+00003Ar 1               kbDummyCb:
+00003Ar 1  60                   rts
+00003Br 1               
+00003Br 1               ; -----------------------------------------------------------------------------
+00003Br 1               ; kbIntHandler: Standard keyboard interrupt handler
+00003Br 1               ; -----------------------------------------------------------------------------
+00003Br 1               kbIntHandler:
+00003Br 1  20 rr rr             jsr kbReadByte
+00003Er 1  E0 00                cpx #0
+000040r 1  F0 F8                beq kbDummyCb
+000042r 1               
+000042r 1  8A                   txa     ; acc now holds scancode
+000043r 1               
+000043r 1  AE 07 7E             ldx KB_CURRENT_STATE
+000046r 1               
+000046r 1  7C rr rr             jmp (kbStateHandlers, x)
+000049r 1               
+000049r 1               KB_STATE_DEFAULT          = 0
+000049r 1               KB_STATE_RELEASE          = 2
+000049r 1               KB_STATE_EXTENDED         = 4
+000049r 1               KB_STATE_EXTENDED_RELEASE = 6
+000049r 1               KB_STATE_PAUSE_SEQ        = 8
+000049r 1               
+000049r 1               kbStateHandlers:
+000049r 1  rr rr rr rr  .word stdKeyHandler, relKeyHandler, extKeyHandler, extRelKeyHandler, pauseKeyHandler
+00004Dr 1  rr rr rr rr  
+000051r 1  rr rr        
+000053r 1               
+000053r 1               ; default scancode handler
+000053r 1               stdKeyHandler
+000053r 1  C9 F0                cmp #KB_RELEASE
+000055r 1  D0 06                bne :+
+000057r 1  A9 02                lda #KB_STATE_RELEASE
+000059r 1  8D 07 7E             sta KB_CURRENT_STATE
+00005Cr 1  60                   rts
+00005Dr 1               :
+00005Dr 1  C9 E0                cmp #KB_EXT_KEY
+00005Fr 1  D0 06                bne :+
+000061r 1  A9 04                lda #KB_STATE_EXTENDED
+000063r 1  8D 07 7E             sta KB_CURRENT_STATE
+000066r 1  60                   rts
+000067r 1               :
+000067r 1  C9 E1                cmp #KB_PAUSE_KEY
+000069r 1  D0 06                bne :+
+00006Br 1  A9 08                lda #KB_STATE_PAUSE_SEQ
+00006Dr 1  8D 07 7E             sta KB_CURRENT_STATE
+000070r 1  60                   rts
+000071r 1               :
+000071r 1                       ; a regular key was pressed
+000071r 1                       ; TODO: bit field rather than a byte per key?
+000071r 1  20 rr rr             jsr kbSetKey
+000074r 1               
+000074r 1  6C 03 7E             jmp (KB_CB_PRESSED)
+000077r 1                       ; subroutine returns above
+000077r 1               
+000077r 1               ; extended release scancode handler
+000077r 1               extRelKeyHandler:
+000077r 1  09 80                ora #$80
+000079r 1                       ; flow through
+000079r 1               
+000079r 1               ;  release scancode handler
+000079r 1               relKeyHandler:
+000079r 1  AA                   tax
+00007Ar 1  20 rr rr             jsr kbClearKey
+00007Dr 1               
+00007Dr 1  A9 00                lda #KB_STATE_DEFAULT
+00007Fr 1  8D 07 7E             sta KB_CURRENT_STATE
+000082r 1  8A                   txa
+000083r 1               
+000083r 1  6C 05 7E             jmp (KB_CB_RELEASED)
+000086r 1               
+000086r 1               ; extended scancode handler
+000086r 1               extKeyHandler:
+000086r 1  C9 F0                cmp #KB_RELEASE
+000088r 1  D0 06                bne :+
+00008Ar 1  A9 06                lda #KB_STATE_EXTENDED_RELEASE
+00008Cr 1  8D 07 7E             sta KB_CURRENT_STATE
+00008Fr 1  60                   rts
+000090r 1               :
+000090r 1  20 rr rr             jsr kbSetKey
+000093r 1               
+000093r 1  A9 00                lda #KB_STATE_DEFAULT
+000095r 1  8D 07 7E             sta KB_CURRENT_STATE
+000098r 1  8A                   txa
+000099r 1               
+000099r 1  6C 03 7E             jmp (KB_CB_PRESSED)
+00009Cr 1               
+00009Cr 1               ; pause/break sequence scancode handler
+00009Cr 1               pauseKeyHandler:
+00009Cr 1  C9 77                cmp #$77
+00009Er 1  D0 18                bne @notLastByte
+0000A0r 1  AA                   tax
+0000A1r 1  AD FB 7E             lda KB_PRESSED_MAP + KB_SCANCODE_PAUSE
+0000A4r 1  D0 06                bne :+
+0000A6r 1  8E FB 7E             stx KB_PRESSED_MAP + KB_SCANCODE_PAUSE
+0000A9r 1  6C 03 7E             jmp (KB_CB_PRESSED)
+0000ACr 1               :
+0000ACr 1  9C FB 7E             stz KB_PRESSED_MAP + KB_SCANCODE_PAUSE
+0000AFr 1               
+0000AFr 1  A9 00                lda #KB_STATE_DEFAULT
+0000B1r 1  8D 07 7E             sta KB_CURRENT_STATE
+0000B4r 1  8A                   txa
+0000B5r 1               
+0000B5r 1  6C 05 7E             jmp (KB_CB_RELEASED)
+0000B8r 1               
+0000B8r 1               @notLastByte
+0000B8r 1  60                   rts
+0000B9r 1               
+0000B9r 1               ; -----------------------------------------------------------------------------
+0000B9r 1               ; Outputs:
+0000B9r 1               ;   A: Value of the KB Status (0 if no key)
+0000B9r 1               ;   X: PS/2 Scancode byte
+0000B9r 1               ; -----------------------------------------------------------------------------
+0000B9r 1               kbReadByte:
+0000B9r 1  A2 00                ldx #0
+0000BBr 1  A9 04                lda #$04
+0000BDr 1  2C 81 7F             bit KB_STATUS_ADDR
+0000C0r 1  F0 08                beq @end
+0000C2r 1               
+0000C2r 1  A0 20                ldy #32         ; TODO: this could probably be smaller
+0000C4r 1               :
+0000C4r 1  88           	dey
+0000C5r 1  D0 FD        	bne :-
+0000C7r 1               
+0000C7r 1  AE 80 7F             ldx KB_IO_ADDR
+0000CAr 1               @end
+0000CAr 1  60                   rts
+0000CBr 1               
+0000CBr 1               
+0000CBr 1               ; -----------------------------------------------------------------------------
+0000CBr 1               ; kbSetKey: Set a key is pressed in KB_PRESSED_MAP
+0000CBr 1               ; Inputs:
+0000CBr 1               ;    A - scancode
+0000CBr 1               ; -----------------------------------------------------------------------------
+0000CBr 1               kbSetKey:
+0000CBr 1  AE 08 7E             ldx KB_BUFFER_HEAD      ; store at head of buffer
+0000CEr 1  9D 0A 7E             sta KB_BUFFER, x
+0000D1r 1               
+0000D1r 1  8D 01 7E             sta KB_TMP_X            ; find byte in map
+0000D4r 1  4A                   lsr
+0000D5r 1  4A                   lsr
+0000D6r 1  4A                   lsr
+0000D7r 1  AA                   tax
+0000D8r 1  AD 01 7E             lda KB_TMP_X
+0000DBr 1  29 07                and #$07
+0000DDr 1  A8                   tay
+0000DEr 1  BD 1A 7E             lda KB_PRESSED_MAP, x
+0000E1r 1  19 rr rr             ora tableBitFromLeft, y ; set bit in map byte
+0000E4r 1  9D 1A 7E             sta KB_PRESSED_MAP, x   ; update map
+0000E7r 1               
+0000E7r 1                       ; check for toggle keys
+0000E7r 1  AE 01 7E             ldx KB_TMP_X
+0000EAr 1  E0 58                cpx #KB_SCANCODE_CAPS_LOCK
+0000ECr 1  D0 08                bne :+
+0000EEr 1  A9 08                lda #KB_CAPS_LOCK
+0000F0r 1  4D 00 7E             eor KB_FLAGS
+0000F3r 1  8D 00 7E             sta KB_FLAGS
+0000F6r 1               :
+0000F6r 1               
+0000F6r 1  AD 08 7E             lda KB_BUFFER_HEAD      ; increment (and mask) buffer head
+0000F9r 1  1A                   inc
+0000FAr 1  29 0F                and #KB_BUFFER_MASK
+0000FCr 1  8D 08 7E             sta KB_BUFFER_HEAD
+0000FFr 1  60                   rts
+000100r 1               
+000100r 1               ; -----------------------------------------------------------------------------
+000100r 1               ; kbClearKey: Clear a key is pressed in KB_PRESSED_MAP
+000100r 1               ; Inputs:
+000100r 1               ;    A - scancode
+000100r 1               ; -----------------------------------------------------------------------------
+000100r 1               kbClearKey:
+000100r 1  8D 01 7E             sta KB_TMP_X
+000103r 1  4A                   lsr
+000104r 1  4A                   lsr
+000105r 1  4A                   lsr
+000106r 1  AA                   tax
+000107r 1  AD 01 7E             lda KB_TMP_X
+00010Ar 1  29 07                and #$07
+00010Cr 1  A8                   tay
+00010Dr 1  BD 1A 7E             lda KB_PRESSED_MAP, x
+000110r 1  39 rr rr             and tableInvBitFromLeft, y
+000113r 1  9D 1A 7E             sta KB_PRESSED_MAP, x
+000116r 1  60                   rts
+000117r 1               
+000117r 1               
+000117r 1               ; -----------------------------------------------------------------------------
+000117r 1               ; kbPopTail: Pop a scancode from the tail of the buffer
+000117r 1               ; Inputs:
+000117r 1               ;    A - scancode
+000117r 1               ; -----------------------------------------------------------------------------
+000117r 1               kbPopTail:
+000117r 1  AD 09 7E             lda KB_BUFFER_TAIL
+00011Ar 1  AA                   tax
+00011Br 1  1A                   inc
+00011Cr 1  29 0F                and #KB_BUFFER_MASK
+00011Er 1  8D 09 7E             sta KB_BUFFER_TAIL
+000121r 1  BD 0A 7E             lda KB_BUFFER, x
+000124r 1  60                   rts
+000125r 1               
+000125r 1               ; -----------------------------------------------------------------------------
+000125r 1               ; kbIsPressed: Is a key pressed right now?
+000125r 1               ; Inputs:
+000125r 1               ;    X - scancode
+000125r 1               ; Returns:
+000125r 1               ;    Z - clear if pressed, set if not pressed
+000125r 1               ; -----------------------------------------------------------------------------
+000125r 1               kbIsPressed:
+000125r 1  08                   php
+000126r 1  78                   sei
+000127r 1  8E 01 7E             stx KB_TMP_X
+00012Ar 1  8A                   txa
+00012Br 1  4A                   lsr
+00012Cr 1  4A                   lsr
+00012Dr 1  4A                   lsr
+00012Er 1  AA                   tax
+00012Fr 1  AD 01 7E             lda KB_TMP_X
+000132r 1  29 07                and #$07
+000134r 1  A8                   tay
+000135r 1  B9 rr rr             lda tableBitFromLeft, y
+000138r 1  3D 1A 7E             and KB_PRESSED_MAP, x
+00013Br 1  AE 01 7E             ldx KB_TMP_X
+00013Er 1  28                   plp
+00013Fr 1  C9 00                cmp #0
+000141r 1  60                   rts
+000142r 1               
+000142r 1               ; -----------------------------------------------------------------------------
+000142r 1               ; kbWaitForScancode: Wait for a key press
+000142r 1               ; Returns:
+000142r 1               ;    Z set if no scancode, Z clear if there is a scancode
+000142r 1               ; -----------------------------------------------------------------------------
+000142r 1               kbCheckForScancode:
+000142r 1  08                   php
+000143r 1  78                   sei
+000144r 1  38                   sec
+000145r 1  AD 08 7E             lda KB_BUFFER_HEAD
+000148r 1  ED 09 7E             sbc KB_BUFFER_TAIL
+00014Br 1  28                   plp
+00014Cr 1  C9 00                cmp #0
+00014Er 1  60                   rts
+00014Fr 1               
+00014Fr 1               ; -----------------------------------------------------------------------------
+00014Fr 1               ; kbWaitForScancode: Wait for a key press
+00014Fr 1               ; Returns:
+00014Fr 1               ;    A - scancode
+00014Fr 1               ; -----------------------------------------------------------------------------
+00014Fr 1               kbWaitForScancode:
+00014Fr 1  20 rr rr             jsr kbCheckForScancode
+000152r 1  F0 FB                beq kbWaitForScancode
+000154r 1  08                   php
+000155r 1  78                   sei
+000156r 1  20 rr rr             jsr kbPopTail
+000159r 1  28                   plp
+00015Ar 1  29 FF                and #$ff
+00015Cr 1  30 F1                bmi kbWaitForScancode
+00015Er 1  60                   rts
+00015Fr 1               
+00015Fr 1               ; -----------------------------------------------------------------------------
+00015Fr 1               ; kbNextScancode: Return the next scancode in the buffer or zero if empty
+00015Fr 1               ; Returns:
+00015Fr 1               ;    A - scancode (or zero)
+00015Fr 1               ; -----------------------------------------------------------------------------
+00015Fr 1               kbNextScancode:
+00015Fr 1  08                   php
+000160r 1  78                   sei
+000161r 1  AD 08 7E             lda KB_BUFFER_HEAD
+000164r 1  CD 09 7E             cmp KB_BUFFER_TAIL
+000167r 1  F0 07                beq @noScancode
+000169r 1  20 rr rr             jsr kbPopTail
+00016Cr 1  28                   plp
+00016Dr 1  C9 00                cmp #0
+00016Fr 1  60                   rts
+000170r 1               
+000170r 1               @noScancode
+000170r 1  28                   plp
+000171r 1  A9 00                lda #0
+000173r 1  60                   rts
+000174r 1               
+000174r 1               ; -----------------------------------------------------------------------------
+000174r 1               ; kbScancodeToAscii: Convert a scancode to ascii shift/caps lock is honoured
+000174r 1               ; Inputs:
+000174r 1               ;    A - scancode (or zero)
+000174r 1               ; Returns:
+000174r 1               ;    A - ascii character
+000174r 1               ;    C - set if valid character in A
+000174r 1               ; -----------------------------------------------------------------------------
+000174r 1               kbScancodeToAscii:
+000174r 1  DA                   phx
+000175r 1  8D 01 7E             sta KB_TMP_X
+000178r 1  18                   clc
+000179r 1  10 02                bpl :+
+00017Br 1  FA                   plx
+00017Cr 1  60                   rts
+00017Dr 1               :
+00017Dr 1  08                   php
+00017Er 1  78                   sei
+00017Fr 1  A2 02                ldx #KB_SHIFT_LEFT_MAP_BYTE
+000181r 1  A9 20                lda #KB_SHIFT_LEFT_MAP_BIT
+000183r 1  3C 1A 7E             bit KB_PRESSED_MAP, x
+000186r 1  F0 03                beq :+
+000188r 1  38                   sec
+000189r 1  80 0A                bra @doneShiftCheck
+00018Br 1               :
+00018Br 1               
+00018Br 1  A2 0B                ldx #KB_SHIFT_RIGHT_MAP_BYTE
+00018Dr 1  A9 40                lda #KB_SHIFT_RIGHT_MAP_BIT
+00018Fr 1  3C 1A 7E             bit KB_PRESSED_MAP, x
+000192r 1  F0 01                beq :+
+000194r 1  38                   sec
+000195r 1               :
+000195r 1               
+000195r 1               @doneShiftCheck:
+000195r 1  B0 0C                bcs @shiftedKeys
+000197r 1  AE 01 7E             ldx KB_TMP_X
+00019Ar 1  10 02                bpl :+  ; if greater than 127, is a return value from sent message
+00019Cr 1  A2 00                ldx #0
+00019Er 1               :
+00019Er 1  BD rr rr             lda KEY_MAP, x
+0001A1r 1  80 0A                bra @end
+0001A3r 1               
+0001A3r 1               @shiftedKeys:
+0001A3r 1  AE 01 7E             ldx KB_TMP_X
+0001A6r 1  10 02                bpl :+   ; if greater than 127, is a return value from sent message
+0001A8r 1  A2 00                ldx #0
+0001AAr 1               :
+0001AAr 1  BD rr rr             lda KEY_MAP_SHIFTED, x
+0001ADr 1               
+0001ADr 1               @end
+0001ADr 1  20 rr rr             jsr isAlpha
+0001B0r 1  90 14                bcc @afterAlphaCheck
+0001B2r 1  8D 01 7E             sta KB_TMP_X
+0001B5r 1  A9 08                lda #KB_CAPS_LOCK
+0001B7r 1  2D 00 7E             and KB_FLAGS
+0001BAr 1  F0 07                beq :+
+0001BCr 1  AD 01 7E             lda KB_TMP_X
+0001BFr 1  49 20                eor #$20
+0001C1r 1  80 03                bra @afterAlphaCheck
+0001C3r 1               :
+0001C3r 1  AD 01 7E             lda KB_TMP_X
+0001C6r 1               @afterAlphaCheck
+0001C6r 1  28                   plp
+0001C7r 1  FA                   plx
+0001C8r 1  C9 FF                cmp #$ff
+0001CAr 1  38                   sec
+0001CBr 1  D0 01                bne :+
+0001CDr 1  18                   clc
+0001CEr 1               :
+0001CEr 1  60                   rts
+0001CFr 1               
+0001CFr 1               ; -----------------------------------------------------------------------------
+0001CFr 1               ; kbReadAscii: Read an ASCII caharacter from the keyboard queue
+0001CFr 1               ; Returns:
+0001CFr 1               ;    A - ascii character
+0001CFr 1               ;    C - set if valid character in A
+0001CFr 1               ; -----------------------------------------------------------------------------
+0001CFr 1               kbReadAscii:
+0001CFr 1  08                   php
+0001D0r 1  78                   sei
+0001D1r 1  DA                   phx
+0001D2r 1  20 rr rr             jsr kbNextScancode
+0001D5r 1  F0 05                beq @noKey
+0001D7r 1  FA                   plx
+0001D8r 1  28                   plp
+0001D9r 1  4C rr rr             jmp kbScancodeToAscii
+0001DCr 1               @noKey
+0001DCr 1  FA                   plx
+0001DDr 1  28                   plp
+0001DEr 1  18                   clc
+0001DFr 1  60                   rts
+0001E0r 1               
+0001E0r 1               ; -----------------------------------------------------------------------------
+0001E0r 1               ; isLower: Is the ASCII character a lower-case letter (a-z)
+0001E0r 1               ; -----------------------------------------------------------------------------
+0001E0r 1               ; Inputs:
+0001E0r 1               ;   A: ASCII character
+0001E0r 1               ; Outputs:
+0001E0r 1               ;   Carry set if lower case, carry clear if not lower case
+0001E0r 1               ; -----------------------------------------------------------------------------
+0001E0r 1               isLower:
+0001E0r 1  C9 61                cmp #'a'
+0001E2r 1  90 05                bcc @notLower   ; less than 'a'?
+0001E4r 1  C9 7B                cmp #'z' + 1
+0001E6r 1  90 02                bcc @isLower    ; less than or equal 'z'?
+0001E8r 1  18                   clc
+0001E9r 1               @notLower:
+0001E9r 1  60                   rts
+0001EAr 1               
+0001EAr 1               @isLower
+0001EAr 1  38                   sec
+0001EBr 1  60                   rts
+0001ECr 1               
+0001ECr 1               
+0001ECr 1               ; -----------------------------------------------------------------------------
+0001ECr 1               ; isUpper: Is the ASCII character a upper-case letter (A-Z)
+0001ECr 1               ; -----------------------------------------------------------------------------
+0001ECr 1               ; Inputs:
+0001ECr 1               ;   A: ASCII character
+0001ECr 1               ; Outputs:
+0001ECr 1               ;   Carry set if upper case, carry clear if not upper case
+0001ECr 1               ; -----------------------------------------------------------------------------
+0001ECr 1               isUpper:
+0001ECr 1  C9 41                cmp #'A'
+0001EEr 1  90 05                bcc @notUpper   ; less than 'A'?
+0001F0r 1  C9 5B                cmp #'Z' + 1
+0001F2r 1  90 02                bcc @isUpper    ; less than or equal 'Z'?
+0001F4r 1  18                   clc
+0001F5r 1               @notUpper:
+0001F5r 1  60                   rts
+0001F6r 1               
+0001F6r 1               @isUpper
+0001F6r 1  38                   sec
+0001F7r 1  60                   rts
+0001F8r 1               
+0001F8r 1               ; -----------------------------------------------------------------------------
+0001F8r 1               ; isAlpha: Is the ASCII character alphanumeric (A-Z, a-z)
+0001F8r 1               ; -----------------------------------------------------------------------------
+0001F8r 1               ; Inputs:
+0001F8r 1               ;   A: ASCII character
+0001F8r 1               ; Outputs:
+0001F8r 1               ;   Carry set if alpha, carry clear if not alpha
+0001F8r 1               ; -----------------------------------------------------------------------------
+0001F8r 1               isAlpha:
+0001F8r 1  20 rr rr             jsr isLower
+0001FBr 1  90 EF                bcc isUpper
+0001FDr 1  60                   rts
+0001FEr 1               
+0001FEr 1               tableBitFromLeft:
+0001FEr 1  80 40 20 10  .byte $80,$40,$20,$10,$08,$04,$02,$01
+000202r 1  08 04 02 01  
+000206r 1               tableInvBitFromLeft:
+000206r 1  7F BF DF EF  .byte $7f,$bf,$df,$ef,$f7,$fb,$fd,$fe
+00020Ar 1  F7 FB FD FE  
+00020Er 1               tableBitFromRight:
+00020Er 1  01 02 04 08  .byte $01,$02,$04,$08,$10,$20,$40,$80
+000212r 1  10 20 40 80  
+000216r 1               tableInvBitFromRight:
+000216r 1  FE FD FB F7  .byte $fe,$fd,$fb,$f7,$ef,$df,$bf,$7f
+00021Ar 1  EF DF BF 7F  
+00021Er 1               tableBitsFromLeft:
+00021Er 1  80 C0 E0 F0  .byte $80,$c0,$e0,$f0,$f8,$fc,$fe,$ff
+000222r 1  F8 FC FE FF  
+000226r 1               
+000226r 1               KEY_MAP:
+000226r 1               ;      0   1   2   3   4   5   6   7   8   9   a   b   c   d   e   f
+000226r 1  FF FF FF FF  .byte $ff,$ff,$ff,$ff,$ff,$ff,$ff,$ff,$ff,$ff,$ff,$ff,$ff,$09,$60,$ff; 0
+00022Ar 1  FF FF FF FF  
+00022Er 1  FF FF FF FF  
+000236r 1  FF FF FF FF  .byte $ff,$ff,$ff,$ff,$ff,$71,$31,$ff,$ff,$ff,$7a,$73,$61,$77,$32,$ff; 1
+00023Ar 1  FF 71 31 FF  
+00023Er 1  FF FF 7A 73  
+000246r 1  FF 63 78 64  .byte $ff,$63,$78,$64,$65,$34,$33,$ff,$ff,$20,$76,$66,$74,$72,$35,$ff; 2
+00024Ar 1  65 34 33 FF  
+00024Er 1  FF 20 76 66  
+000256r 1  FF 6E 62 68  .byte $ff,$6e,$62,$68,$67,$79,$36,$ff,$ff,$ff,$6d,$6a,$75,$37,$38,$ff; 3
+00025Ar 1  67 79 36 FF  
+00025Er 1  FF FF 6D 6A  
+000266r 1  FF 2C 6B 69  .byte $ff,$2c,$6b,$69,$6f,$30,$39,$ff,$ff,$2e,$2f,$6c,$3b,$70,$2d,$ff; 4
+00026Ar 1  6F 30 39 FF  
+00026Er 1  FF 2E 2F 6C  
+000276r 1  FF FF 27 FF  .byte $ff,$ff,$27,$ff,$5b,$3d,$ff,$ff,$ff,$ff,$0d,$5d,$ff,$5c,$ff,$ff; 5
+00027Ar 1  5B 3D FF FF  
+00027Er 1  FF FF 0D 5D  
+000286r 1  FF FF FF FF  .byte $ff,$ff,$ff,$ff,$ff,$ff,$08,$ff,$ff,$31,$ff,$34,$37,$ff,$ff,$ff; 6
+00028Ar 1  FF FF 08 FF  
+00028Er 1  FF 31 FF 34  
+000296r 1  30 FF 32 35  .byte $30,$ff,$32,$35,$36,$38,$1b,$ff,$ff,$2b,$33,$2d,$2a,$39,$ff,$ff; 7
+00029Ar 1  36 38 1B FF  
+00029Er 1  FF 2B 33 2D  
+0002A6r 1               
+0002A6r 1               KEY_MAP_SHIFTED:
+0002A6r 1               ;      0   1   2   3   4   5   6   7   8   9   a   b   c   d   e   f
+0002A6r 1  FF FF FF FF  .byte $ff,$ff,$ff,$ff,$ff,$ff,$ff,$ff,$ff,$ff,$ff,$ff,$ff,$09,$7e,$ff; 0
+0002AAr 1  FF FF FF FF  
+0002AEr 1  FF FF FF FF  
+0002B6r 1  FF FF FF FF  .byte $ff,$ff,$ff,$ff,$ff,$51,$21,$ff,$ff,$ff,$5a,$53,$41,$57,$40,$ff; 1
+0002BAr 1  FF 51 21 FF  
+0002BEr 1  FF FF 5A 53  
+0002C6r 1  FF 43 58 44  .byte $ff,$43,$58,$44,$45,$24,$23,$ff,$ff,$20,$56,$46,$54,$52,$25,$ff; 2
+0002CAr 1  45 24 23 FF  
+0002CEr 1  FF 20 56 46  
+0002D6r 1  FF 4E 42 48  .byte $ff,$4e,$42,$48,$47,$59,$5e,$ff,$ff,$ff,$4d,$4a,$55,$26,$2a,$ff; 3
+0002DAr 1  47 59 5E FF  
+0002DEr 1  FF FF 4D 4A  
+0002E6r 1  FF 3C 4B 49  .byte $ff,$3c,$4b,$49,$4f,$29,$28,$ff,$ff,$3e,$3f,$4c,$3a,$50,$5f,$ff; 4
+0002EAr 1  4F 29 28 FF  
+0002EEr 1  FF 3E 3F 4C  
+0002F6r 1  FF FF 22 FF  .byte $ff,$ff,$22,$ff,$7b,$2b,$ff,$ff,$ff,$ff,$0d,$7d,$ff,$7c,$ff,$ff; 5
+0002FAr 1  7B 2B FF FF  
+0002FEr 1  FF FF 0D 7D  
+000306r 1  FF FF FF FF  .byte $ff,$ff,$ff,$ff,$ff,$ff,$08,$ff,$ff,$31,$ff,$34,$37,$ff,$ff,$ff; 6
+00030Ar 1  FF FF 08 FF  
+00030Er 1  FF 31 FF 34  
+000316r 1  30 FF 32 35  .byte $30,$ff,$32,$35,$36,$38,$1b,$ff,$ff,$2b,$33,$2d,$2a,$39,$ff,$ff; 7
+00031Ar 1  36 38 1B FF  
+00031Er 1  FF 2B 33 2D  
+000325r 1               
