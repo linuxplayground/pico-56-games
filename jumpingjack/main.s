@@ -1,4 +1,5 @@
 ; vim: set ft=asm_ca65 ts=4 sw=4 et:
+;
 .include "io.inc"
 .include "app.inc"
 .include "macro.inc"

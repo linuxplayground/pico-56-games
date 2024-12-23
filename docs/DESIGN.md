@@ -1,28 +1,30 @@
 <!-- vim: set ft=markdown tw=80 cc=80 ts=4 sw=4 et: -->
 # Jumping Jack - for the tms9918A
 
-https://www.youtube.com/watch?v=PlbsruwV_k0
+## Original Source Code
+
+- The reverse engineered Z80 source code by Chris Ward, 2012
+[cjw116@googlemail.com](cjw116@googlemail.com)
+- Sprite data converted from: [https://community.arduboy.com/t/jumping-jack/10895](https://community.arduboy.com/t/jumping-jack/10895)
+
+## My Notes
+
+- There are also source code comments that I have made and am working on.
+
+[https://www.youtube.com/watch?v=PlbsruwV_k0](https://www.youtube.com/watch?v=PlbsruwV_k0)
 
 Player starts at the bottom of the screen and has to jump up through gaps in the
-sliding platforms above.  Each floor has one or two holes in it that move from
-left to right or right to left in a continuous loop.  The player can only jump
-through the holes.
+floors above.  At the start of the level there are 2 gaps in the floors.  Every
+time the player completes a successful jump to the next level, a new gap is
+added.  Gaps will be added on each good jump until a maximum of 8 gaps.
 
 The floor moves under the player so if a hole appears under the players feet,
-the player falls through to the floor below.
+Jack falls through to the floor below and is stunned for a short time.
 
-If a player hits their head on a floor during a jump, they die.
+If Jack hits his head on a floor during a jump he falls to the floor and is
+stunned for a short time.
 
-Goal to reach the top of the screen.
-
-There are floors.  Each floor has its own speed and direction.  These can be
-determined in level data.
-
-Later levels of the game introduced hazards such as an AXE or a snake that
-appears on the player's floor usually at floor 2 and then when it reaches the
-end of the floor it moves up to the next floor until it gets to the roof where
-it will then go back to the player's floor. Starting at least 20 blocks away
-from the player.
+The goal is to reach the top of the screen.
 
 ```text
 ^ ______________     ______________________
@@ -39,7 +41,7 @@ from the player.
 |
 | ___________________    __________________
 |
-v 31  PLAYER START AND SCORE.  Player can move over score.
+v LIVES                         SCORE
 ```
 
 ## Mapping the floor
@@ -48,12 +50,6 @@ When you think about it, the floor map is really just a bunch of solid lines.
 The holes in the floor are what move giving the shifting floor appearance.  From
 a software perspective, the game needs to calculate the new position of the hole
 on each floor, fill in the old hole and draw the new one on each game frame.
-
-## Player movement
-
-When the player jumps, the sprite is moved upwards at a few pixels each frame.
-The floors continue to shift during the jump animation and collision checks are
-done each time the player is in a new location.
 
 ## Holes
 
@@ -104,8 +100,10 @@ animation.
 =========|=======|........|........|........|========|======== F0
 ```
 
-The gap is moved to the left by one tile width at the beginning of frame F0.
-The intermediate frames dot not move, only the first and last cells are updated
+The gap is moved to the left by one tile width at the beginning of frame F0
+(actually end of F3).
+
+The intermediate frames do not move, only the first and last cells are updated
 to give the appearence of moving.
 
 ## JACK STATE
@@ -132,6 +130,17 @@ Jumping is a 3 phase affair.
     2.2. Repeat jump animation for 4 frames, move jack up 8 pixels.
     2.3. Set jack to idle state.
 3. Bad Jump
-    3.1. Repeat jump animation for 4 frames, move jack up 8 pixels.
-    3.2. switch to crash animation for 4 frames., Jack doesn't move.
-    3.3. switch to fall animation for 4 frames. move jack down 8 pixels.
+    3.1. switch to crash animation and move jack up 8 pixels.
+    3.2. switch to fall animation for 4 frames. move jack down 8 pixels.
+    3.3. switch to stunned animation for 32 frames.
+    3.4. switch to idle state.
+
+## Player movement
+
+Jack moves two pixels every frame.  There are 4 animation frames for each type
+of animation.  Jack is controlled with `A`, `S`, `D` and `SPACE`.
+
+- A,a = Move Left
+- S,s = Stop
+- D,d = Move Right
+- SPACE = jump
