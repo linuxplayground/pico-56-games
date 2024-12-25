@@ -1,5 +1,13 @@
-; vim: set ft=asm_ca65 ts=4 sw=4 et:
+; vim: set ft=asm_ca65 ts=4 sw=4 et cc=80:
+; Pico-56-Jumping Jack Main Game
 ;
+; Copyright (c) 2024 David Latham
+;
+; This code is licensed under the MIT license
+;
+; https://github.com/linuxplayground/pico-56-games
+
+
 .include "io.inc"
 .include "app.inc"
 .include "macro.inc"
@@ -25,15 +33,15 @@ frame:  .byte 0
 .code
 
 start:
-    sei
-    ldx #$ff
-    tsx
-    jsr kbInit
-    jsr initAudio
+    sei                 ; disable interrupts during initial setup
+    ldx #$ff            ; set stack pointer to known location.  Asissts with
+    tsx                 ; debugging
+    jsr kbInit          ; init the keyboard library
+    jsr initAudio       ; init audio features.
 
-    jsr vdp_g2_init
-
-    lda #<sprite_start
+    jsr vdp_g2_init     ; Init into G2.5 mode.  Like G1 but allows for discreet
+                        ; char colours based on nametable entry, not location.
+    lda #<sprite_start  ; load sprite data
     sta ptr1
     lda #>sprite_start
     sta ptr1+1
@@ -41,9 +49,9 @@ start:
     sta ptr2
     lda #>sprite_end
     sta ptr2+1
-    jsr load_sprite_patterns
+    jsr vdp_load_sprite_patterns
 
-    lda #<font_start
+    lda #<font_start    ; load font and tiles.
     sta ptr1
     lda #>font_start
     sta ptr1+1
@@ -51,18 +59,22 @@ start:
     sta ptr2
     lda #>font_end
     sta ptr2+1
-    jsr load_font_patterns
+    jsr vdp_load_font_patterns
 
-    lda #LIVES_CHAR
+    lda #$6e            ; set all tile colors to RED on LIGHT GREY
+    jsr vdp_setup_colortable
+
+    lda #LIVES_CHAR     ; set the LIVES character to Blue.
     ldx #$4e
     jsr vdp_color_char
 
-    stz score
+    stz score           ; init score to 0
     stz score+1
 
+    cli                 ; ready to enable interrupts now.
 
-    cli
-
+; Display the game area and move the 2 gaps around the screen.  Display welcome
+; text
 attract_mode:
     lda #1
     sta attract_flag
@@ -101,31 +113,38 @@ attract_mode:
 
 
 new_game:
-    lda attract_flag
-    bne :+
+    lda attract_flag        ; if in attract mode, we do not reset the screen
+    bne :+                  ; and score
     jsr vdp_clear_screenbuf
     stz score
     stz score+1
 
 :
-    jsr reset_data
-    jsr draw_lines
+    jsr reset_data          ; initialise all game variables except for score.
+    jsr draw_lines          ; draw the lines based on their Y offsets.
 
-    jsr rnd
+    jsr rnd                 ; find random location for first right moving gap
     sta gaps_pos+0
     sta gaps_pos+1
     sta gaps_pos+2
     sta gaps_pos+3
 
-    jsr rnd
+    jsr rnd                 ; find random location for second left moving gap
     sta gaps_pos+4
     sta gaps_pos+5
     sta gaps_pos+6
     sta gaps_pos+7
 
-    jsr update_lives
-    jsr update_score
+    jsr update_lives        ; show the lives on thes screen.
+    jsr update_score        ; show the score on the screen.
 
+
+; -----------------------------------------------------------------------------
+; MAIN GAME LOOP
+;
+; This is where the magic happens.  Jumping Jack is one large state machine.
+; Each state determins what will happen to jack next.
+; -----------------------------------------------------------------------------
 game_loop:
     ; check if in attract mode
     lda attract_flag
@@ -933,7 +952,7 @@ gap_and_update:
 flush_sprite_attributes:
     lda #<SPRITEATTRIBUTETABLE
     ldx #>SPRITEATTRIBUTETABLE
-    jsr set_write_address
+    jsr vdp_set_write_address
 
     lda #<jsprite
     sta ptr1

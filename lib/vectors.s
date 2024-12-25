@@ -1,16 +1,25 @@
-; vim: set ft=asm_ca65 ts=4 sw=4 et:vdp
+; vim: set ft=asm_ca65 ts=4 sw=4 et cc=80:
+; PICO-56 Interrupts and vectors
+;
+; Copyright (c) 2024 David Latham
+;
+; This code is licensed under the MIT license
+;
+; https://github.com/linuxplayground/pico-56-games
+
 
 .include "io.inc"
 
-.export _vdp_sync, _vdp_status
+.export vdp_sync, vdp_status
 
 .autoimport
 
 .segment "DATA"
 
-_vdp_status: .byte 0
-_vdp_sync:   .byte 0
+vdp_status: .byte 0
+vdp_sync:   .byte 0
 
+; PICO-56 Interrupt IDs and Bits
 TMS9918_IRQ      = 1      ; /INT
 KB_IRQ           = 2      ; RES1
 TMS9918_IRQ_BIT  = (1 << (TMS9918_IRQ - 1))
@@ -20,9 +29,15 @@ INT_CTRL_ADDRESS = $7fdf
 .autoimport
 
 .code
+; NMI not used
 nmi:
     rti
 
+; Standard IRQ handler.  This checks for VDP VSYNC interrupt and keyboard
+; interrupt.
+;
+; The VSYNC interrupt sets the vdp_status variable and sets the MSB of the
+; vdp_sync variable.
 irq_handler:
     pha
     phx
@@ -33,9 +48,9 @@ irq_handler:
     bit #TMS9918_IRQ_BIT
     beq :+
     lda vdp_reg
-    sta _vdp_status
+    sta vdp_status
     lda #$80
-    sta _vdp_sync
+    sta vdp_sync
     ;bra @exit
 :
     bit #KB_IRQ_BIT
@@ -48,6 +63,7 @@ irq_handler:
     pla
     rti
 
+; Standard 6502 boot vectors
 .segment "VECTORS"
     .addr nmi
     .addr start
