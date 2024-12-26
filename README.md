@@ -2,9 +2,16 @@
 # pico-56-games
 
 A collection of games written for the Pico-56
-[https://github.com/visrealm/pico-56](https://github.com/visrealm/pico-56ttps://github.com/visrealm/pico-56)
+[https://github.com/visrealm/pico-56](https://github.com/visrealm/pico-56)
 
 - jumpingjack - Original game (c) 1983 Imagine Software
+
+## Source Code
+
+The Keyboard and Sound libraries are lifted stright out of the HB-56 Source code
+repository on github.
+
+The VDP library is my own and I have commented it as best I can.
 
 ## COMPILING
 
