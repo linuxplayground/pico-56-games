@@ -58,7 +58,7 @@
 .export vdp_screenbuf, vdp_xy_to_ptr, vdp_print_xy, vdp_char_xy
 .export vdp_read_char_xy, vdp_color_char, vdp_set_write_address
 .export vdp_load_font_patterns, vdp_load_sprite_patterns
-.export vdp_setup_colortable
+.export vdp_setup_colortable, vdp_flush_sprite_attributes
 
 .autoimport
 
@@ -386,6 +386,26 @@ init_sprite_attributes:
     dex                         ; loop until all sprite attributes are set.
     bne @L1
     rts
+
+; Flush the data pointed to by ptr1 into VDPRAM at the sprites attribute region.
+; INPUT: ptr1 is a pointer to the sprite attributes data in regular RAM.
+; OUTPUT: VOID
+vdp_flush_sprite_attributes:
+    lda #<SPRITEATTRIBUTETABLE
+    ldx #>SPRITEATTRIBUTETABLE
+    jsr vdp_set_write_address
+
+    ldy #0
+@L1:
+    lda (ptr1),y
+    cmp #$D0
+    beq @EXIT
+    sta vdp_ram
+    iny
+    bpl @L1
+@EXIT:
+    rts
+
 
 .rodata
 ; These are the registers for the G2 mode with G1 like nametable arrangement as

@@ -6,22 +6,3 @@ PATTERNTABLE            = $0000
 SPRITEATTRIBUTETABLE    = $3B00
 SPRITEPATTERNTABLE      = $1800
 
-.enum jstate
-    still   = 0
-    left    = 1
-    right   = 2
-    jump_1  = 3 ; 
-    jump_2  = 4 ; good jump
-    jump_3  = 5 ; good jump
-    falling = 6
-    crash   = 7 ; when a jump is bad
-    crash_fall = 8
-    stun    = 9 ; second half of a bad jump
-.endenum
-
-.struct sprite
-    yp .byte
-    xp .byte
-    pa .byte
-    co .byte
-.endstruct
