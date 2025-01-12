@@ -384,6 +384,7 @@ game_loop:
     bcc key                ; if no, proceed to user input
     lda #jstate::falling    ; set jack state to falling
     sta jstate
+    stz jump_note_ctr
     stz j_j_fr              ; reset jack animation frame to 0
     jmp game_loop           ; loop
 
@@ -464,6 +465,7 @@ do_jump:
 @good:
     lda #jstate::jump_1     ; set Jack state to phase one of a good jump.
     sta jstate
+    stz jump_note_ctr
     stz j_j_fr              ; reset jump animation frame counter.
     jmp game_loop           ; loop
 @crash:
@@ -723,10 +725,10 @@ animate_jack_crash_fall:
 ; The animation for for stunned Jack only udpates once every second frame and
 ; continues until the animation counter runs out.
 animate_jack_stun:
-    jsr sfx_stun            ; play the stunned sound effect
     lda frame               ; check if current frame is an even number?
-    and #1
-    bne :+                  ; NO? return
+    and #3
+    bne :+                  ; no? return
+    jsr sfx_stun            ; play the stunned sound effect
     lda stun_ctr            ; load the stun acounter
     and #3                  ; and find mod 4
     asl                     ; multiply by 4
@@ -1002,7 +1004,7 @@ gaps_frame_jump_table:
 gaps_F0:
     lda #7                  ; there are 8 gaps to draw
     sta gap
-@gaploop:                   ; for each gap do.
+@L1:
     ; draw the outside cells
     ldx gap
     lda gaps_pos,x
@@ -1018,7 +1020,13 @@ gaps_F0:
     jsr get_gap_xy          ; CELL 4
     lda #1
     jsr vdp_char_xy
+    ; gaploop
+    dec gap
+    bpl @L1                 ; end loop
 
+    lda #7
+    sta gap
+@L2:
     ; draw the middle cells
     ldx gap
     lda gaps_pos,x
@@ -1040,7 +1048,7 @@ gaps_F0:
 
     ; gaploop
     dec gap
-    bpl @gaploop            ; end loop
+    bpl @L2                 ; end loop
     rts
 
 
@@ -1290,30 +1298,34 @@ sfx_run:
 ; play jump notes indexed by jump_note_ctr.  This routine is called once at the
 ; end of each phase of a good jump.  So 3 excalting beeps are heard.
 sfx_jump:
-    inc jump_note_ctr
-    ldx jump_note_ctr
-    cpx #2
+    lda frame
+    and #1
     bne :+
-    lda #$ff
+    inc jump_note_ctr
+    lda jump_note_ctr
+    and #3
     sta jump_note_ctr
-:
+    tax
     lda jump_notes,x
+    tay
     jmp play_note
-    rts
+:   rts
 
 ; play fall notes indexed by jump_note_ctr.  This routine is called once every 4
 ; frames of falling.  So 3 de-escalating beeps are heard.
 sfx_fall:
-    inc jump_note_ctr
-    ldx jump_note_ctr
-    cpx #2
+    lda frame
+    and #1
     bne :+
-    lda #$ff
+    inc jump_note_ctr
+    lda jump_note_ctr
+    and #3
     sta jump_note_ctr
-:
+    tax
     lda fall_notes,x
+    tay
     jmp play_note
-    rts
+:   rts
 
 ; Turn on the noise.
 sfx_crash:
@@ -1332,10 +1344,15 @@ sfx_silence:
 ; The stun sound effect is a short, high pitched beep played every 4th frame
 ; until the stun counter runs out.
 sfx_stun:
-    lda frame
-    and #3
+    lda stun_ctr
+    and #1
     bne :+
-    lda #4
+    ldx jump_note_ctr
+    inc jump_note_ctr
+    lda jump_note_ctr
+    and #3
+    sta jump_note_ctr
+    lda fall_notes,x
     jmp play_note
 :   rts
 
@@ -1371,7 +1388,7 @@ j_r_fr: .byte 0     ; frame counter for when jack is running.
 j_j_fr: .byte 0     ; frame counter for when jack is jumping.
 stun_ctr:.byte 0    ; counter for stunn time.
 run_note_toggle: .byte 0 ; alternating note toggle
-jump_note_ctr:  .byte $ff  ; counter of notes for jumping and falling.
+jump_note_ctr:  .byte $0  ; counter of notes for jumping and falling.
 attract_flag: .byte 1
 lives:  .byte 4
 game_over_flag: .byte 0
@@ -1395,37 +1412,43 @@ fall_notes: .byte 3, 1, 4
 run_notes:  .byte 1, 2, 1, 2
 
 gap_and_idx:
-    .word 0
-    .addr gap_ones
-    .addr gap_twos
-    .addr gap_threes
-    .addr gap_fours
-    .addr gap_fives
-    .addr gap_sixes
-    .addr gap_sevens
-    .addr gap_eights
-    .addr gap_nines
-    .addr gap_tens
+    .word   gap_zeros
+    .word   gap_ones
+    .word   gap_twos
+    .word   gap_threes
+    .word   gap_fours
+    .word   gap_fives
+    .word   gap_sixes
+    .word   gap_sevens
+    .word   gap_eights
+    .word   gap_nines
+    .word   gap_tens
+    .word   gap_elevens
+
+gap_zeros:
+    .byte 0, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5
 gap_ones:
-    .byte 1,2,3,4,5,6,7,8
+    .byte 0, 1, 2, 3, 4, 5, 6, 7, 8, 9,10,11
 gap_twos:
-    .byte 2,2,3,4,5,5,9,10
+    .byte 0, 2, 2, 3, 4, 5, 5, 9,11, 9,10,11
 gap_threes:
-    .byte 3,3,3,4,5,6,5,9
+    .byte 0, 3, 3, 3, 4, 5, 5, 5,10, 5,10,10
 gap_fours:
-    .byte 4,4,4,4,5,10,4,5
+    .byte 0, 4, 4, 4, 4, 5, 5, 5, 5, 5, 5, 5
 gap_fives:
-    .byte 5,5,5,5,5,5,5,5
+    .byte 0, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5
 gap_sixes:
-    .byte 6,5,6,10,5,6,6,6
+    .byte 0, 6, 5, 5, 5, 5, 6, 6, 6, 5, 5, 5
 gap_sevens:
-    .byte 7,9,5,4,5,6,7,7
+    .byte 0, 7, 9, 5, 5, 5, 6, 7, 7, 9, 5, 9
 gap_eights:
-    .byte 8,10,9,5,5,6,7,8
+    .byte 0, 8,11,10, 5, 5, 6, 7, 8, 9,10,11
 gap_nines:
-    .byte 5,5,5,5,5,5,5,5
+    .byte 0, 9, 9, 5, 5, 5, 5, 9, 9, 9, 5, 9
 gap_tens:
-    .byte 5,5,5,5,5,5,5,5
+    .byte 0,10,10,10, 5, 5, 5, 5,10, 5,10,10
+gap_elevens:
+    .byte 0,11,11,10, 5, 5, 5, 9,11, 9,10,11
 
 ; AUDIO DATA
 ; ----------
