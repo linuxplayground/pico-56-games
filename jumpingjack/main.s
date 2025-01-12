@@ -393,47 +393,44 @@ game_loop:
 ; =============================================================================
 
 key:
-    lda #0                  ; Due to a bug in the keybard library, force the neg bit to be clear.
-    jsr kbReadAscii         ; read the ascii value of the last keypress.
-    bcs @process_key        ; if a valid key was pressed, proceed to processing
-    jmp game_loop           ; the key else, loop.
-@process_key:
-    sta tmp1                ; save the key pressed.
-    lda jstate              ; check if jack is still or running.
+    lda attract_flag
+    beq :+
+    lda #NES_START
+    jsr nes1_pressed
+    bcc @next
+    stz attract_flag
+    jmp new_game
+:   lda jstate              ; check if jack is still or running.
     cmp #jstate::jump_1     ; if he is, then proceed to processing key
     bcc :+                  ; else
     jmp game_loop           ; loop
-:   lda tmp1                ; restore key pressed
-:   cmp #'a'                ; Was key a or A ?
-    beq :+
-    cmp #'A'
-    bne :++                 ; NO? Check for s or S.
-:   lda #jstate::left       ; YES? set state to running left.
+:   lda #$FF
+    cmp NES1_IO_ADDR
+    bne :+
+    lda jstate
+    cmp #jstate::still
+    beq @next
+    lda #jstate::still
+    sta jstate
+    stz frame
+    lda #4
+    sta jsprite + sprite::pa
+    jmp game_loop
+:   lda #NES_LEFT
+    jsr nes1_pressed
+    bcc :+
+    lda #jstate::left       ; YES? set state to running left.
     sta jstate
     jmp game_loop           ; loop
-:   cmp #'s'                ; check for s or S
-    beq :+
-    cmp #'S'
-    bne :++                 ; NO? Check for d or D.
-:   lda #jstate::still      ; set state to still
-    sta jstate
-    lda #4                  ; set jack animation frame to start of still
-    sta jsprite + sprite::pa ; animation immediately.
-    stz frame               ; also reset frame to zero.
-    jmp game_loop           ; loop
-:   cmp #'d'                ; Check for d or D.
-    beq :+
-    cmp #'D'
-    bne :++                 ; NO? Check for SPACE
-:   lda #jstate::right      ; set jack state to running right.
+:   lda #NES_RIGHT
+    jsr nes1_pressed
+    bcc :+
+    lda #jstate::right      ; set state to still
     sta jstate
     jmp game_loop           ; loop
-:   cmp #' '                ; Check for SPACE
-    bne @next               ; NO? loop.
-    lda attract_flag        ; Were we in attract mode?
-    beq :+                  ; NO? proceed to process jump.
-    stz attract_flag        ; YES? Reset attract flag and jump to new
-    jmp new_game            ; game.
+:   lda #NES_A
+    jsr nes1_pressed
+    bcc @next
 :   jmp do_jump             ; process jump
 @next:
     jmp game_loop           ; loop
@@ -1401,7 +1398,7 @@ score:  .res 3, 0   ; score in BCD format, takes up 3 bytes
 
 .rodata
 ; strings
-space_to_start: .asciiz "Press SPACE to Start"
+space_to_start: .asciiz "NES 1: Press START"
 you_win:        .asciiz "You Win!"
 jumping_jack:   .asciiz "Jumping Jack"
 by_pd:          .asciiz "By Productiondave"

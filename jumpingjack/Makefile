@@ -16,6 +16,7 @@ SOURCES = main.s \
 	  $(LIB)/vdp.s \
 	  $(LIB)/kbd.s \
 	  $(LIB)/ay-3-8910.s \
+	  $(LIB)/nes.s \
 	  $(LIB)/vectors.s
 
 OBJS = $(addprefix $(BUILD_DIR)/, $(SOURCES:.s=.o))

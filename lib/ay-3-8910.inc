@@ -8,7 +8,6 @@
 ;
 ; https://github.com/visrealm/hbc-56
 
-IO_PORT_BASE_ADDRESS = $7F00
 AY_IO_PORT = $40
 AY_PSG0 = $00
 AY_PSG1 = $04
