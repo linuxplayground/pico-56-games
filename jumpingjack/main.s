@@ -416,6 +416,10 @@ key:
     lda #4
     sta jsprite + sprite::pa
     jmp game_loop
+:   lda #NES_A
+    jsr nes1_pressed
+    bcc :+
+    jmp do_jump             ; process jump
 :   lda #NES_LEFT
     jsr nes1_pressed
     bcc :+
@@ -424,14 +428,9 @@ key:
     jmp game_loop           ; loop
 :   lda #NES_RIGHT
     jsr nes1_pressed
-    bcc :+
+    bcc @next
     lda #jstate::right      ; set state to still
     sta jstate
-    jmp game_loop           ; loop
-:   lda #NES_A
-    jsr nes1_pressed
-    bcc @next
-:   jmp do_jump             ; process jump
 @next:
     jmp game_loop           ; loop
 
